@@ -3,16 +3,20 @@ Username search demo for Maigret.
 
 Searches for a username across the top-ranked sites in Maigret's bundled
 database and prints any accounts that were found, along with profile data
-extracted via socid_extractor when available.
+extracted via socid_extractor when available. Optionally writes one or
+more reports (txt/csv/json/html/pdf/md) to a target directory.
 
 Usage:
     python examples/username_search_demo.py <username> [--top N] [--timeout S]
                                                        [--tags tag1,tag2]
                                                        [--no-parse]
+                                                       [--report fmt[,fmt...]]
+                                                       [--out-dir DIR]
 
 Examples:
     python examples/username_search_demo.py soxoj
     python examples/username_search_demo.py soxoj --top 100 --tags coding
+    python examples/username_search_demo.py soxoj --report html,json,csv
 """
 
 import argparse
@@ -24,6 +28,18 @@ import sys
 from maigret import search as maigret_search
 from maigret.sites import MaigretDatabase
 from maigret.notify import QueryNotifyPrint
+from maigret.report import (
+    generate_report_context,
+    save_csv_report,
+    save_html_report,
+    save_json_report,
+    save_markdown_report,
+    save_pdf_report,
+    save_txt_report,
+)
+
+
+REPORT_FORMATS = {"txt", "csv", "json", "ndjson", "html", "pdf", "md"}
 
 
 DEFAULT_DB_PATH = os.path.join(
@@ -64,7 +80,62 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_DB_PATH,
         help=f"Path to data.json (default: {DEFAULT_DB_PATH})",
     )
+    parser.add_argument(
+        "--report",
+        default="",
+        help=(
+            "Comma-separated report formats to write. "
+            f"Choices: {', '.join(sorted(REPORT_FORMATS))}"
+        ),
+    )
+    parser.add_argument(
+        "--out-dir",
+        default="reports",
+        help="Directory to write reports into (default: reports)",
+    )
     return parser.parse_args()
+
+
+def write_reports(
+    formats: list,
+    out_dir: str,
+    username: str,
+    results: dict,
+) -> list:
+    os.makedirs(out_dir, exist_ok=True)
+    written = []
+    base = os.path.join(out_dir, f"report_{username}")
+
+    context = None
+    if {"html", "pdf", "md"} & set(formats):
+        context = generate_report_context([(username, "username", results)])
+
+    for fmt in formats:
+        if fmt == "txt":
+            path = f"{base}.txt"
+            save_txt_report(path, username, results)
+        elif fmt == "csv":
+            path = f"{base}.csv"
+            save_csv_report(path, username, results)
+        elif fmt == "json":
+            path = f"{base}.json"
+            save_json_report(path, username, results, report_type="simple")
+        elif fmt == "ndjson":
+            path = f"{base}.ndjson"
+            save_json_report(path, username, results, report_type="ndjson")
+        elif fmt == "html":
+            path = f"{base}.html"
+            save_html_report(path, context)
+        elif fmt == "pdf":
+            path = f"{base}.pdf"
+            save_pdf_report(path, context)
+        elif fmt == "md":
+            path = f"{base}.md"
+            save_markdown_report(path, context)
+        else:
+            continue
+        written.append(path)
+    return written
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -94,6 +165,17 @@ async def run(args: argparse.Namespace) -> int:
         ids_data = result.get("ids_data") or {}
         for key, value in ids_data.items():
             print(f"      {key}: {value}")
+
+    formats = [f.strip().lower() for f in args.report.split(",") if f.strip()]
+    invalid = [f for f in formats if f not in REPORT_FORMATS]
+    if invalid:
+        print(f"\nUnknown report format(s): {', '.join(invalid)}", file=sys.stderr)
+        return 2
+    if formats:
+        written = write_reports(formats, args.out_dir, args.username, results)
+        print("\nReports written:")
+        for path in written:
+            print(f"  - {path}")
 
     return 0 if found else 1
 
